@@ -10,8 +10,23 @@ function fence(text, lang = '') {
   return '```' + lang + '\n' + body + '\n```\n';
 }
 
-function statusFromBool(ok) {
-  return ok ? 'GREEN' : 'RED';
+// Developer-facing framing of the internal RED/AMBER/GREEN classification.
+// Presentation only — the audit still classifies findings by level; this just
+// maps those levels to clearer "must fix before deploy" vs "safe to defer" labels.
+const BUCKET = {
+  RED: { header: 'Must fix before deploy', badge: 'Must fix' },
+  AMBER: { header: 'Safe to defer', badge: 'Defer' },
+  GREEN: { header: 'Already compatible', badge: 'Compatible' },
+};
+
+/** Short developer-facing badge for a classification level. */
+function badge(level) {
+  return (BUCKET[level] || { badge: level }).badge;
+}
+
+/** Badge for a pass/fail step (pass = compatible, fail = must fix). */
+function statusBadge(ok) {
+  return ok ? BUCKET.GREEN.badge : BUCKET.RED.badge;
 }
 
 /** Count *.ts/tsx source files under src/ (for the "already clean" no-op count). */
@@ -83,7 +98,7 @@ function computeSummary(data) {
 }
 
 function summaryLine(totals) {
-  return `${totals.GREEN} green, ${totals.AMBER} amber, ${totals.RED} red`;
+  return `${totals.RED} must-fix, ${totals.AMBER} defer, ${totals.GREEN} compatible`;
 }
 
 // ---- section renderers ----
@@ -104,11 +119,11 @@ function renderSummary(summary) {
   const lines = [
     '## Summary',
     '',
-    '| Category | Green | Amber | Red |',
+    '| Category | Must fix | Defer | Compatible |',
     '| --- | ---: | ---: | ---: |',
   ];
   for (const r of summary.rows) {
-    lines.push(`| ${r.name} | ${r.GREEN} | ${r.AMBER} | ${r.RED} |`);
+    lines.push(`| ${r.name} | ${r.RED} | ${r.AMBER} | ${r.GREEN} |`);
   }
   lines.push('');
   lines.push(`**Overall: ${summaryLine(summary.totals)}.**`);
@@ -162,9 +177,9 @@ function renderDependencyAudit(audit) {
     lines.push('');
   };
 
-  block('RED — blocks migration', byLevel('RED'), '_None._');
-  block('AMBER — works now, breaks later', byLevel('AMBER'), '_None._');
-  block('GREEN — confirmed compatible', byLevel('GREEN'), '_None._');
+  block('Must fix before deploy', byLevel('RED'), '_None — nothing here blocks the deploy._');
+  block('Safe to defer', byLevel('AMBER'), '_None._');
+  block('Already compatible', byLevel('GREEN'), '_None._');
 
   if (audit.peerDep.warningLines.length) {
     lines.push('<details><summary>Raw peer-dependency warnings from install</summary>');
@@ -182,12 +197,12 @@ function renderTypecheck(data) {
   const lines = ['## Type-check', ''];
 
   if (!tc.ran) {
-    lines.push('GREEN — no TypeScript configuration found (nothing to check).');
+    lines.push('**Compatible** — no TypeScript configuration found (nothing to check).');
     lines.push('');
     return lines.join('\n');
   }
 
-  const status = tc.ok ? (fg ? 'AMBER' : 'GREEN') : 'RED';
+  const status = badge(tc.ok ? (fg ? 'AMBER' : 'GREEN') : 'RED');
   lines.push(`**${status}** — ran \`${tc.command}\` (${tc.detection.type} tsconfig), ${tc.errorCount} error(s).`);
   lines.push('');
 
@@ -212,12 +227,12 @@ function renderTests(data) {
   const lines = ['## Test suite', ''];
 
   if (!t.ran) {
-    lines.push(`**RED** — could not run tests: ${t.reason}`);
+    lines.push(`**Must fix** — could not run tests: ${t.reason}`);
     lines.push('');
     return lines.join('\n');
   }
 
-  lines.push(`**${statusFromBool(t.ok)}** — ran \`${t.detection.command} ${t.detection.args.join(' ')}\` (${t.runner}).`);
+  lines.push(`**${statusBadge(t.ok)}** — ran \`${t.detection.command} ${t.detection.args.join(' ')}\` (${t.runner}).`);
   lines.push('');
 
   const behavioral = data.audit.behavioral.findings;
@@ -225,7 +240,7 @@ function renderTests(data) {
     lines.push('Deprecation warnings extracted from test output:');
     lines.push('');
     for (const f of behavioral) {
-      lines.push(`- **${f.level}** ${f.label} (${f.count}×)`);
+      lines.push(`- **${badge(f.level)}** ${f.label} (${f.count}×)`);
     }
     lines.push('');
   }
@@ -250,7 +265,7 @@ function renderLatent(data) {
     lines.push(`Scanned ${elementRef.scanned} react-peer packages (${elementRef.engine}). These reach into a React element's \`.ref\` — works today via React 19's compat shim, breaks on the next React minor:`);
     lines.push('');
     for (const f of elementRef.findings) {
-      lines.push(`- **AMBER** \`${f.pkg}@${f.version}\` — ${f.reason}`);
+      lines.push(`- **Defer** \`${f.pkg}@${f.version}\` — ${f.reason}`);
       if (f.action) lines.push(`  - ↳ ${f.action}`);
     }
   }
@@ -262,7 +277,7 @@ function renderLatent(data) {
     lines.push('_No React deprecation/removal warnings found in test output._');
   } else {
     for (const f of behavioral.findings) {
-      lines.push(`- **${f.level}** ${f.label} (${f.count}×)`);
+      lines.push(`- **${badge(f.level)}** ${f.label} (${f.count}×)`);
       lines.push(`  - ↳ e.g. \`${f.sample}\``);
     }
   }
@@ -287,26 +302,29 @@ function renderNextSteps(data) {
   const lines = ['## Recommended next steps', ''];
   const ordered = [];
 
+  // Must fix before deploy — comes first.
   if (!steps.install.ok) {
-    ordered.push(`Resolve the dependency install failure (\`${steps.install.command}\` exited non-zero). Do NOT use --force or --legacy-peer-deps — fix the underlying peer conflict.`);
+    ordered.push(`**Must fix** — resolve the dependency install failure (\`${steps.install.command}\` exited non-zero). Do NOT use --force or --legacy-peer-deps — fix the underlying peer conflict.`);
   }
   for (const f of audit.peerDep.findings.filter((x) => x.level === 'RED')) {
-    ordered.push(`Fix RED dependency **${f.pkg}@${f.version}**: ${f.action}`);
+    ordered.push(`**Must fix** — dependency **${f.pkg}@${f.version}**: ${f.action}`);
   }
   for (const f of audit.behavioral.findings.filter((x) => x.level === 'RED')) {
-    ordered.push(`Fix removed-API usage: ${f.label}.`);
+    ordered.push(`**Must fix** — removed API in use: ${f.label}.`);
   }
   if (!steps.typecheck.ok && steps.typecheck.ran) {
-    ordered.push(`Fix the ${steps.typecheck.errorCount} type error(s) reported by \`${steps.typecheck.command}\`.`);
+    ordered.push(`**Must fix** — the ${steps.typecheck.errorCount} type error(s) reported by \`${steps.typecheck.command}\`.`);
   }
+
+  // Safe to defer — after everything blocking is handled.
   if (audit.falseGreen.finding) {
-    ordered.push(audit.falseGreen.finding.action);
+    ordered.push(`**Safe to defer** — ${audit.falseGreen.finding.action}`);
   }
   for (const f of audit.elementRef.findings) {
-    ordered.push(`Plan an upgrade for AMBER **${f.pkg}@${f.version}** (element.ref): ${f.action}`);
+    ordered.push(`**Safe to defer** — plan an upgrade for **${f.pkg}@${f.version}** (element.ref): ${f.action}`);
   }
   for (const f of audit.behavioral.findings.filter((x) => x.level === 'AMBER')) {
-    ordered.push(`Address deprecation: ${f.label}.`);
+    ordered.push(`**Safe to defer** — deprecation: ${f.label}.`);
   }
 
   if (ordered.length === 0) {

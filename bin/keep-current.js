@@ -18,7 +18,7 @@ Options:
 Example:
   npx keep-current migrate --from 18 --to 19 ./apps/web
 
-Exit codes: 0 = clean (no RED findings), 1 = RED findings present, 2 = aborted.
+Exit codes: 0 = clean (nothing must-fix), 1 = must-fix items present, 2 = aborted.
 `;
 
 /** Minimal, dependency-free argv parser for the migrate command. */
@@ -89,7 +89,9 @@ function main() {
     });
 
     const rel = path.relative(process.cwd(), reportPath) || reportPath;
+    // e.g. "4 must-fix, 8 defer, 6 compatible — see ./keep-current-report.md"
     process.stdout.write(`\n${summaryLine} — see ./${rel}\n`);
+    // Exit 1 only when there are "must fix before deploy" items (internal RED).
     process.exit(summary.totals.RED > 0 ? 1 : 0);
   } catch (err) {
     if (err instanceof MigrationAbort) {
