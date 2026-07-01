@@ -1,0 +1,20 @@
+{
+  "name": "keep-current",
+  "version": "1.0.0",
+  "description": "Automates React major-version migrations and produces a confidence report that catches what the official codemods mark done but isn't.",
+  "license": "MIT",
+  "bin": {
+    "keep-current": "bin/keep-current.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
